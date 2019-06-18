@@ -89,6 +89,7 @@ module Make(C: S.CONFIGURATION with type 'a io = 'a Lwt.t) = struct
     mutable resume_fns: (t -> unit Lwt.t) list;
     l : Lwt_mutex.t;
     c : unit Lwt_condition.t;
+    mutable callback: (Cstruct.t -> unit Lwt.t) option;
   }
 
   let h = Eventchn.init ()
@@ -230,8 +231,12 @@ module Make(C: S.CONFIGURATION with type 'a io = 'a Lwt.t) = struct
 
   let listen nf ~header_size:_ receive_callback =
     MProf.Trace.label "Netchannel.Frontend.listen";
+    nf.callback <- Some receive_callback;
     let rec loop from =
-      rx_poll nf.t receive_callback >>= fun () ->
+      match nf.callback with
+      | None -> assert false
+      | Some cb ->
+      rx_poll nf.t cb >>= fun () ->
       refill_requests nf.t >>= fun () ->
       tx_poll nf.t;
       Activations.after nf.t.evtchn from >>= fun from ->
@@ -255,7 +260,7 @@ module Make(C: S.CONFIGURATION with type 'a io = 'a Lwt.t) = struct
           let l = Lwt_mutex.create () in
           let c = Lwt_condition.create () in
           (* packets are dropped until listen is called *)
-          let dev = { t; resume_fns=[]; l; c } in
+          let dev = { t; resume_fns=[]; l; c; callback=None } in
           Hashtbl.add devices id' dev;
           return dev
         end
